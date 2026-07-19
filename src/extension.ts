@@ -1,5 +1,15 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
-import { LanguageClient, LanguageClientOptions, ServerOptions, TransportKind } from 'vscode-languageclient/node';
+import {
+  LanguageClient,
+  LanguageClientOptions,
+  LogMessageNotification,
+  LogMessageParams,
+  MessageType,
+  ServerOptions,
+  TransportKind,
+} from 'vscode-languageclient/node';
+import { parseSynthError, ParsedSynthError } from './synthErrorParser';
 
 /**
  * This extension is a minimal VS Code client for the CDK LSP (`cdk lsp`).
@@ -29,6 +39,15 @@ import { LanguageClient, LanguageClientOptions, ServerOptions, TransportKind } f
 // 拡張機能全体で1つだけ保持する LSP クライアント。deactivate 時の停止用に持っておく。
 let client: LanguageClient | undefined;
 
+// Recent window/logMessage payloads from the server. When synth fails with a
+// runtime error, the server discards the real error text from diagnostics and
+// only logs it here — so we buffer the logs to recover file/line info later.
+// サーバーから届いた直近の window/logMessage の内容。synth が実行時エラーで
+// 失敗すると、サーバーは本当のエラーメッセージを診断には載せずログにしか
+// 流さないため、後からファイル・行を復元できるようにバッファしておく。
+const MAX_BUFFERED_LOGS = 50;
+let recentLogs: string[] = [];
+
 // Called by VS Code when the extension is activated (when a TypeScript / Python
 // file is opened, as declared in activationEvents in package.json).
 // 拡張機能の有効化時 (package.json の activationEvents で指定した
@@ -43,6 +62,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (!workspaceFolder) {
     return;
   }
+
+  const applicationDir = workspaceFolder.uri.fsPath;
+
+  // Collection for our own remapped synth-error diagnostics. The server cannot
+  // attach runtime synth errors to the source line, so the client publishes them here.
+  // クライアント側で publish し直す synth エラー診断用のコレクション。
+  // サーバーは実行時の synth エラーをソース行に紐付けられないため、ここで補完する。
+  const synthDiagnostics = vscode.languages.createDiagnosticCollection('cdk-synth');
+  context.subscriptions.push(synthDiagnostics);
+
+  // When synth fails with a runtime error the server publishes a single generic
+  // diagnostic ("... Subprocess exited with error 1") pinned to cdk.json line 1.
+  // We use that as the trigger to remap the buffered stderr to the real location.
+  // 実行時エラーで synth が失敗すると、サーバーは cdk.json の1行目に汎用メッセージ
+  // ("... Subprocess exited with error 1") の診断を1つだけ置く。これを合図に、
+  // バッファ済み stderr から本来のエラー位置へマッピングし直す。
+  const cdkJsonPath = path.join(applicationDir, 'cdk.json');
 
   // --- 1. How to start the server / サーバーの起動方法 ---
   // Launch `npx cdk lsp` as a child process for the LSP server.
@@ -85,11 +121,117 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // initialize リクエストでサーバーへ渡す独自オプション。
     // CDK LSP はここで受け取ったディレクトリを CDK アプリとして synth する。
     initializationOptions: {
-      applicationDir: workspaceFolder.uri.fsPath,
+      applicationDir,
+    },
+    middleware: {
+      // Intercepts textDocument/publishDiagnostics before the library stores it.
+      // Only what is passed to next() reaches the Problems panel.
+      // ライブラリが診断を反映する前に textDocument/publishDiagnostics に割り込む。
+      // next() に渡した内容だけが Problems パネルに反映される。
+      handleDiagnostics: (uri, diagnostics, next) => {
+        if (uri.scheme !== 'file' || uri.fsPath !== cdkJsonPath) {
+          next(uri, diagnostics);
+          return;
+        }
+
+        // An empty publish for cdk.json means synth succeeded again
+        // (the server clears every previously published URI on recovery).
+        // cdk.json への空の publish は synth の成功 (回復) を意味する
+        // (サーバーは成功時に過去へ publish した全 URI をクリアする)。
+        if (diagnostics.length === 0) {
+          synthDiagnostics.clear();
+          recentLogs = [];
+          next(uri, diagnostics);
+          return;
+        }
+
+        const fallback = diagnostics.find(
+          (diagnostic) =>
+            diagnostic.source === 'cdk synth' && diagnostic.message.includes('Subprocess exited with error')
+        );
+
+        if (!fallback) {
+          next(uri, diagnostics);
+          return;
+        }
+
+        // The real stderr arrived earlier as logMessage notifications, one
+        // (indentation-stripped) line per message, so parse the joined buffer.
+        // 本当の stderr は先に logMessage として「1行=1通知(インデント除去済み)」
+        // で届いているため、バッファ全体を結合してからパースする。
+        const parsed: ParsedSynthError | undefined = parseSynthError(recentLogs.join('\n'), applicationDir);
+        recentLogs = [];
+
+        // Unknown stderr shape: keep the server's fallback diagnostic
+        // so the user still sees that synth failed.
+        // stderr の形式が想定外の場合はサーバーのフォールバック診断を
+        // 残し、synth の失敗自体は見えるようにする。
+        if (!parsed) {
+          next(uri, diagnostics);
+          return;
+        }
+
+        const position = new vscode.Position(parsed.line, parsed.character);
+        const remapped = new vscode.Diagnostic(
+          new vscode.Range(position, position),
+          parsed.message,
+          vscode.DiagnosticSeverity.Error
+        );
+
+        remapped.source = 'cdk synth';
+
+        if (parsed.code) {
+          remapped.code = parsed.code;
+        }
+
+        synthDiagnostics.clear();
+        synthDiagnostics.set(vscode.Uri.file(parsed.file), [remapped]);
+
+        // Drop the useless cdk.json:1:1 entry now that the real location is shown.
+        // 本来の位置に診断を出せたので、無意味な cdk.json:1:1 の診断は取り除く。
+        next(
+          uri,
+          diagnostics.filter((diagnostic) => diagnostic !== fallback)
+        );
+      },
     },
   };
 
   client = new LanguageClient('cdkLsp', 'CDK Language Server', serverOptions, clientOptions);
+  const currentClient = client;
+
+  // Buffer server logs (which carry the raw synth stderr) for the middleware above.
+  // Registering our own handler REPLACES the library's built-in one (vscode-jsonrpc
+  // keeps a single handler per method), so we also re-emit each message to the
+  // Output channel exactly the way the built-in handler would have.
+  // サーバーログ (synth の生 stderr を含む) を上記ミドルウェア用にバッファする。
+  // 自前のハンドラを登録するとライブラリ組み込みのハンドラは「置き換え」になる
+  // (vscode-jsonrpc はメソッドごとに単一ハンドラ) ため、Output チャンネルへの
+  // 出力も組み込みハンドラと同じ形で自前で再現する。
+  client.onNotification(LogMessageNotification.type, (params: LogMessageParams) => {
+    recentLogs.push(params.message);
+
+    if (recentLogs.length > MAX_BUFFERED_LOGS) {
+      recentLogs.shift();
+    }
+
+    switch (params.type) {
+      case MessageType.Error:
+        currentClient.error(params.message, undefined, false);
+        break;
+      case MessageType.Warning:
+        currentClient.warn(params.message, undefined, false);
+        break;
+      case MessageType.Info:
+        currentClient.info(params.message, undefined, false);
+        break;
+      case MessageType.Debug:
+        currentClient.debug(params.message, undefined, false);
+        break;
+      default:
+        currentClient.outputChannel.appendLine(params.message);
+    }
+  });
 
   // --- 3. Commands requested by the server / サーバーが要求するコマンドの実装 ---
   // The CDK LSP shows a CodeLens on construct lines (e.g. "Creates AWS::SQS::Queue")
