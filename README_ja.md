@@ -14,6 +14,7 @@ AWS CDK Language Server (`cdk lsp`) を試して学ぶための最小構成の V
 ## 前提条件
 
 - VS Code 1.100 以上
+- AWS CDK CLI 2.1132.0 以上
 - ワークスペースに CDK アプリがあり、`cdk lsp` に対応した `aws-cdk` がローカルインストールされていること（サーバーはワークスペースルートから `pnpm` で解決されます）
 
 ## ソースの構造

@@ -14,6 +14,7 @@ The extension launches `pnpm cdk lsp` as a language server and connects it to VS
 ## Requirements
 
 - VS Code 1.100+
+- AWS CDK CLI 2.1132.0+
 - A CDK app in the workspace with a `cdk lsp`-capable `aws-cdk` installed locally (the server is resolved via `pnpm` from the workspace root)
 
 ## Source Structure
