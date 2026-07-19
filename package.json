@@ -1,0 +1,32 @@
+{
+  "name": "cdk-lsp-vscode-client",
+  "displayName": "CDK LSP Local Client",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:python"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cdkExplorer.openResource",
+        "title": "CDK Explorer: Open Resource"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.100.0",
+    "typescript": "^5.8.0"
+  }
+}
