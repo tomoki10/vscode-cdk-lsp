@@ -31,8 +31,9 @@ export class CdkLspTestStack extends cdk.Stack {
     });
     const bucket3 = new s3.Bucket(this, 'DemoBucket3', {
       encryption: s3.BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
-      versioned: true,
+    });
+    const bucket4 = new s3.Bucket(this, 'DemoBucket4', {
+      encryption: s3.BucketEncryption.S3_MANAGED,
       // publicReadAccess: true,
     });
     const queue = new sqs.Queue(this, 'DemoQueue', {
