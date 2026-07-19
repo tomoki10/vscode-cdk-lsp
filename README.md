@@ -54,3 +54,7 @@ After running the above, startup options appear at the top of the code; start wi
 Once started, you can see which CloudFormation resources each CDK construct generates, as shown below. Clicking the CodeLens jumps to the actual definition in the CloudFormation template.
 
 ![lsp-move](./images/lsp-move.gif)
+
+You can also catch code that fails during synth early. For example, `publicReadAccess: true` on an S3 bucket errors out at synth time, and you can see that right in VS Code.
+
+![lsp-move-error](./images/lsp-move-error.gif)

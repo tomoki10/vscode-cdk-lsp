@@ -54,3 +54,7 @@ pnpm cdk lsp
 起動すると以下のように、CDKのソースがどんなCfnのリソースを生成するのか見れます。また表示を押下すると、Cfnテンプレートの実際の定義までジャンプできます。
 
 ![lsp-move](./images/lsp-move.gif)
+
+またSynth実行時にエラーになるコードを早期発見できます。例えば、S3の`publicReadAccess: true`はSynth時にエラーになるので、それがVS Code上でも確認できます。
+
+![lsp-move-error](./images/lsp-move-error.gif)
