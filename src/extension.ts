@@ -111,9 +111,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // --- 2. Client configuration / クライアントの設定 ---
   const clientOptions: LanguageClientOptions = {
     // Which languages should be reported to the server when opened.
-    // CDK apps are written in TypeScript / Python, so target those two.
     // どの言語のファイルを開いたときにサーバーへ通知するか。
-    // CDK アプリは TypeScript / Python で書かれるため、この2つを対象にする。
     documentSelector: [
       {
         scheme: 'file',
