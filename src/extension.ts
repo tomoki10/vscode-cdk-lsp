@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {
+  ExecuteCommandRequest,
   LanguageClient,
   LanguageClientOptions,
   LogMessageNotification,
@@ -87,6 +88,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // LSP サーバーとして `npx cdk lsp` を子プロセスで起動する。
   // transport: stdio は、標準入出力を通じて JSON-RPC メッセージを
   // やり取りする最も一般的な LSP の通信方式。
+  //
+  // Do not swap `npx` for `pnpm` here: `pnpm <script>` prints its own banner
+  // ("> pkg@1.0.0 cdk ...") to stdout, which lands in front of the JSON-RPC
+  // stream and corrupts the Content-Length framing.
+  // ここを `pnpm` に変えてはいけない。`pnpm <script>` は独自のバナー
+  // ("> pkg@1.0.0 cdk ...") を stdout に出すため、それが JSON-RPC ストリームの
+  // 先頭に混ざり Content-Length のフレーミングを壊す。
   const serverOptions: ServerOptions = {
     command: 'npx',
     args: ['cdk', 'lsp'],
@@ -294,6 +302,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // サーバーを起動して initialize ハンドシェイクを行う。
   // 以降のドキュメント同期・CodeLens・診断のやり取りはライブラリが自動で行う。
   await client.start();
+
+  // The server starts with auto-synth DISABLED, so saving a file alone runs
+  // nothing and no diagnostics ever appear. It does expose an "Enable auto-synth"
+  // CodeLens, but CodeLenses are only served once a synth has succeeded — so an
+  // app that currently fails to synth shows no lens to click, and there is no way
+  // out of that deadlock from the editor. Enable it over executeCommand instead,
+  // then run one synth immediately for feedback without waiting for a save.
+  // サーバーは auto-synth が「無効」の状態で起動するため、ファイルを保存しただけでは
+  // 何も走らず診断が出ない。「Enable auto-synth」CodeLens も用意されているが、
+  // CodeLens は synth が成功して初めて返るため、synth が失敗するアプリでは
+  // 押すべき CodeLens 自体が表示されず、エディタ側から抜け出せない。
+  // そこで executeCommand で直接有効化し、保存を待たずに初回 synth も走らせる。
+  for (const command of ['cdk.explorer.enableAutoSynth', 'cdk.explorer.synthNow']) {
+    try {
+      await client.sendRequest(ExecuteCommandRequest.type, { command, arguments: [] });
+    } catch (error) {
+      // Older servers may not provide these commands. Losing auto-synth is not
+      // worth failing activation over, so just record it and carry on.
+      // 古いサーバーではこれらのコマンドが存在しない可能性がある。auto-synth が
+      // 使えないだけで activate 全体を失敗させる必要はないので、記録して続行する。
+      client.warn(`Failed to execute ${command}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }
 
 // Called when the extension is deactivated. Stops the server process.
